@@ -1,0 +1,100 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Mock Travel API",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "https://api.example.com/v1"
+        }
+    ],
+    "paths": {
+        "/flights/search": {
+            "post": {
+                "summary": "Search for available flights",
+                "description": "Search for flights based on origin, destination, and dates",
+                "parameters": [
+                    {
+                        "name": "origin",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Origin airport code"
+                    },
+                    {
+                        "name": "destination",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Destination airport code"
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "departure_date": {
+                                        "type": "string",
+                                        "format": "date"
+                                    },
+                                    "return_date": {
+                                        "type": "string",
+                                        "format": "date"
+                                    },
+                                    "passengers": {
+                                        "type": "integer",
+                                        "minimum": 1
+                                    }
+                                },
+                                "required": [
+                                    "departure_date",
+                                    "passengers"
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/bookings/{id}": {
+            "get": {
+                "summary": "Get booking details",
+                "description": "Retrieve details of a specific booking",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Booking ID"
+                    }
+                ]
+            },
+            "delete": {
+                "summary": "Cancel a booking",
+                "description": "Cancel an existing booking",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Booking ID to cancel"
+                    }
+                ]
+            }
+        }
+    }
+}

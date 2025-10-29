@@ -1,0 +1,21 @@
+{
+    "[python]": {
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": "explicit",
+        },
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "ms-python.black-formatter",
+    },
+    "black-formatter.args": [
+      "--line-length",
+      "100"
+    ],
+    "[json]": {
+      "editor.defaultFormatter": "vscode.json-language-features"
+    },
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "[html]": {
+      "editor.defaultFormatter": "vscode.html-language-features"
+    }
+}
