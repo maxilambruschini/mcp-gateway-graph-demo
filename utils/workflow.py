@@ -18,7 +18,6 @@ def build_full_workflow():
     This function:
     - Creates an in-memory SQLite connection for checkpointing
     - Builds both graphs with SqliteSaver for state persistence
-    - Configures interrupt points for human-in-the-loop
 
     Returns:
         Tuple of (discovery_graph, generation_graph) compiled workflows
@@ -28,12 +27,7 @@ def build_full_workflow():
     checkpointer = SqliteSaver(conn)
 
     # Build both graphs
-    discovery_graph = build_discovery_graph().compile(
-        checkpointer=checkpointer, interrupt_before=["interrupt_for_selection"]
-    )
-
-    generation_graph = build_generation_graph().compile(
-        checkpointer=checkpointer, interrupt_before=["interrupt_for_review"]
-    )
+    discovery_graph = build_discovery_graph().compile(checkpointer=checkpointer)
+    generation_graph = build_generation_graph().compile(checkpointer=checkpointer)
 
     return discovery_graph, generation_graph

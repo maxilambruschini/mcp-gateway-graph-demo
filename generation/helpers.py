@@ -3,21 +3,18 @@
 This module contains:
 - Schema enhancement with metadata
 - Display name generation
-- Vendor, resource, verb extraction
+- Resource, verb extraction
 - Version extraction
-- Fetch with retry
 - Custom field removal for validation
 """
 
 import copy
 import re
-import time
-from typing import Optional
-from urllib.parse import urlparse
 
-import requests
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
-from config import FETCH_TIMEOUT_SECONDS, MAX_FETCH_RETRIES
+from config import llm_mini
 
 
 def enhance_schema_with_metadata(schema: dict, endpoint: dict) -> dict:
@@ -84,16 +81,65 @@ def enhance_schema_with_metadata(schema: dict, endpoint: dict) -> dict:
     return process_object(schema, is_flexible=is_flexible_endpoint)
 
 
-def generate_display_name(tool_name: str, description: str) -> str:
-    """Generate a human-readable display name from tool name or description.
+def generate_display_name_with_llm(method: str, path: str, description: str) -> str:
+    """Generate a human-readable display name using LLM.
 
-    Examples:
-        DUFFEL__AIR__GET_AIRLINE -> "Get Airline"
-        EXAMPLE__FLIGHTS__SEARCH -> "Search Flights"
+    Uses llm_mini to generate concise, action-oriented display names.
 
     Args:
-        tool_name: Tool name in VENDOR__RESOURCE__VERB format
-        description: Description text
+        method: HTTP method (GET, POST, etc.)
+        path: API path (e.g., /api/v1/flights/search)
+        description: Endpoint description
+
+    Returns:
+        Human-readable display name (e.g., "Search Flights")
+
+    Raises:
+        Exception: If LLM call fails (caller should handle with fallback)
+    """
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are an API documentation expert. Generate concise, action-oriented display names for API endpoints."),
+        ("human", """Generate a display name for this API endpoint.
+
+HTTP Method: {method}
+Path: {path}
+Description: {description}
+
+Requirements:
+- 2-5 words maximum
+- Imperative/action style (e.g., "Search Flights", "Create Booking", "Get User Profile")
+- Clear and user-friendly
+- No special characters or underscores
+
+Display name:""")
+    ])
+
+    chain = prompt | llm_mini | StrOutputParser()
+
+    result = chain.invoke({
+        "method": method,
+        "path": path,
+        "description": description or f"{method} {path}"
+    })
+
+    # Clean up the result (remove quotes, extra whitespace)
+    display_name = result.strip().strip('"').strip("'").strip()
+
+    if not display_name:
+        raise ValueError("LLM returned empty display name")
+
+    return display_name
+
+
+def generate_display_name_fallback(method: str, path: str, description: str) -> str:
+    """Generate a human-readable display name using heuristics (fallback logic).
+
+    This is used when LLM-based generation fails.
+
+    Args:
+        method: HTTP method (GET, POST, etc.)
+        path: API path (e.g., /api/v1/flights/search)
+        description: Endpoint description
 
     Returns:
         Human-readable display name
@@ -105,36 +151,59 @@ def generate_display_name(tool_name: str, description: str) -> str:
         if len(first_sentence) <= 50 and first_sentence:
             return first_sentence
 
-    # Fall back to parsing the tool name
-    parts = tool_name.split("__")
-    if len(parts) >= 3:
-        resource = parts[1].replace("_", " ").title()
-        verb = parts[2].replace("_", " ").title()
-        return f"{verb} {resource}"
+    # Fall back to parsing the path and method
+    resource = extract_resource(path)
+    verb = determine_verb(method, path)
 
-    # Last resort: just title-case the name
-    return tool_name.replace("_", " ").title()
+    # Format: "Verb Resource" (e.g., "Search Flights")
+    resource_formatted = resource.replace("_", " ").title()
+    verb_formatted = verb.replace("_", " ").title()
+
+    return f"{verb_formatted} {resource_formatted}"
 
 
-def extract_vendor(server: str) -> str:
-    """Extract vendor name from server URL.
+def generate_display_name(method: str, path: str, description: str) -> str:
+    """Generate a human-readable display name with LLM and fallback.
+
+    Tries LLM-based generation first, falls back to heuristics on failure.
 
     Args:
-        server: Server URL (e.g., https://api.example.com)
+        method: HTTP method (GET, POST, etc.)
+        path: API path (e.g., /api/v1/flights/search)
+        description: Endpoint description
 
     Returns:
-        Vendor name (e.g., "example")
+        Human-readable display name
     """
-    if not server:
-        return "api"
+    try:
+        return generate_display_name_with_llm(method, path, description)
+    except Exception as e:
+        # Log the error and fall back to heuristic approach
+        print(f"⚠️  LLM display name generation failed: {e}. Using fallback.")
+        return generate_display_name_fallback(method, path, description)
 
-    domain = urlparse(server).netloc
-    parts = domain.split(".")
 
-    # Get the main domain name
-    if len(parts) >= 2:
-        return parts[-2]
-    return parts[0] if parts else "api"
+def generate_tool_name_from_display(vendor: str, resource: str, display_name: str) -> str:
+    """Generate tool name from vendor, resource, and display name.
+
+    Format: VENDOR__RESOURCE__SANITIZED_DISPLAY_NAME
+
+    Args:
+        vendor: Vendor/service name (e.g., "example", "duffel")
+        resource: Resource extracted from path (e.g., "flights", "bookings")
+        display_name: Human-readable display name (e.g., "Search Flights")
+
+    Returns:
+        Tool name in VENDOR__RESOURCE__ACTION format (e.g., "EXAMPLE__FLIGHTS__SEARCH_FLIGHTS")
+    """
+    # Sanitize display name: remove special chars, convert spaces to underscores
+    sanitized = re.sub(r'[^a-zA-Z0-9\s]', '', display_name)
+    sanitized = sanitized.strip().replace(' ', '_')
+
+    # Construct tool name
+    tool_name = f"{vendor}__{resource}__{sanitized}".upper()
+
+    return tool_name
 
 
 def extract_resource(path: str) -> str:
@@ -178,41 +247,6 @@ def determine_verb(method: str, path: str) -> str:
     }
 
     return verb_map.get(method, "execute")
-
-
-def extract_version(path: str) -> str:
-    """Extract version from path.
-
-    Args:
-        path: API path (e.g., /api/v1/resource)
-
-    Returns:
-        Version string (e.g., "v1")
-    """
-    match = re.search(r"v(\d+)", path, re.IGNORECASE)
-    return f"v{match.group(1)}" if match else "v1"
-
-
-def fetch_with_retry(url: str, max_retries: int = MAX_FETCH_RETRIES) -> Optional[dict]:
-    """Fetch URL with exponential backoff.
-
-    Args:
-        url: URL to fetch
-        max_retries: Maximum number of retry attempts
-
-    Returns:
-        Dictionary with 'content' key or None on failure
-    """
-    for attempt in range(max_retries):
-        try:
-            time.sleep(2**attempt)  # Exponential backoff
-            response = requests.get(url, timeout=FETCH_TIMEOUT_SECONDS)
-            if response.status_code == 200:
-                return {"content": response.text}
-        except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"⚠️ Failed to fetch {url}: {e}")
-    return None
 
 
 def remove_custom_fields(schema: dict) -> dict:

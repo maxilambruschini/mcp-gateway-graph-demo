@@ -17,15 +17,16 @@ from pydantic import BaseModel, Field
 class DiscoveryState(TypedDict):
     """State for the Discovery Graph."""
 
-    input: Dict[str, Any]  # {"files": [paths], "root_url": str}
-    discovery: Dict[str, Any]  # {"pages": [], "endpoints_raw": [], "catalog": {}}
-    selection: Dict[str, Any]  # {"endpoint_ids": [...]}
+    input: Dict[str, Any]  # {"files": [paths], "server_url": str}
+    discovery: Dict[
+        str, Any
+    ]  # {"pages": [], "endpoints_raw": [], "catalog": {}, "endpoints_normalized": []}
 
 
 class GenerationState(TypedDict):
     """State for the Generation Graph."""
 
-    selection: Dict[str, Any]  # {"endpoint_ids": [...], "endpoints": [...]}
+    selection: Dict[str, Any]  # {"endpoint_ids": [...], "endpoints": [...], "vendor": str}
     generation: Dict[str, Any]  # {"work_items": [], "tools": [], "errors": []}
 
 
@@ -41,9 +42,7 @@ class EndpointInfo(BaseModel):
     path: str = Field(description="API path like /api/v1/resource")
     server: Optional[str] = Field(default="", description="Base server URL")
     description: str = Field(description="Human-readable description")
-    parameters: Optional[List[Dict[str, Any]]] = Field(
-        default=[], description="Parameter details"
-    )
+    parameters: Optional[List[Dict[str, Any]]] = Field(default=[], description="Parameter details")
 
 
 class EndpointList(BaseModel):

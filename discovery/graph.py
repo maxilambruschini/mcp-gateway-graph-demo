@@ -2,21 +2,39 @@
 
 This module builds the Discovery Graph workflow that:
 - Classifies input (file vs URL)
-- Parses files or discovers from web
+- Routes conditionally to parse_files OR discover_from_web
 - Extracts endpoints using regex + LLM
 - Normalizes and deduplicates results
 - Creates a catalog grouped by resource
-- Interrupts for user selection
+
+The graph uses conditional edges to route based on input_type,
+ensuring only the relevant branch (file or URL) executes.
 """
 
 from langgraph.graph import END, StateGraph
 
-from discovery.nodes import (classify_input_node, discover_from_web_node,
-                             endpoint_extractor_node,
-                             interrupt_for_selection_node,
-                             normalize_and_dedup_node, parse_files_node,
-                             summarize_for_ui_node)
+from discovery.nodes import (
+    classify_input_node,
+    discover_from_web_node,
+    endpoint_extractor_node,
+    normalize_and_dedup_node,
+    parse_files_node,
+    summarize_for_ui_node,
+)
 from models import DiscoveryState
+
+
+def route_by_input_type(state: DiscoveryState) -> str:
+    """Route to either parse_files or discover_from_web based on input_type.
+
+    Args:
+        state: Current discovery state with classified input_type
+
+    Returns:
+        Name of the next node to execute ("file" or "url")
+    """
+    input_type = state["discovery"].get("input_type", "file")
+    return input_type
 
 
 def build_discovery_graph():
@@ -34,16 +52,24 @@ def build_discovery_graph():
     workflow.add_node("endpoint_extractor", endpoint_extractor_node)
     workflow.add_node("normalize_and_dedup", normalize_and_dedup_node)
     workflow.add_node("summarize_for_ui", summarize_for_ui_node)
-    workflow.add_node("interrupt_for_selection", interrupt_for_selection_node)
 
     # Add edges
     workflow.set_entry_point("classify_input")
-    workflow.add_edge("classify_input", "parse_files")
-    workflow.add_edge("parse_files", "discover_from_web")
+
+    # Conditional routing from classify_input based on input_type
+    workflow.add_conditional_edges(
+        source="classify_input",
+        path=route_by_input_type,
+        path_map={"file": "parse_files", "url": "discover_from_web"},
+    )
+
+    # Both branches converge at endpoint_extractor
+    workflow.add_edge("parse_files", "endpoint_extractor")
     workflow.add_edge("discover_from_web", "endpoint_extractor")
+
+    # Continue linear flow after convergence
     workflow.add_edge("endpoint_extractor", "normalize_and_dedup")
     workflow.add_edge("normalize_and_dedup", "summarize_for_ui")
-    workflow.add_edge("summarize_for_ui", "interrupt_for_selection")
-    workflow.add_edge("interrupt_for_selection", END)
+    workflow.add_edge("summarize_for_ui", END)
 
     return workflow

@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Debug CLI File",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "main",
+        "args": ["--files", "mock_api_spec.json"],
+        "console": "integratedTerminal",
+        "justMyCode": false
+      },
+      {
+        "name": "Debug CLI URL",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "main",
+        "args": ["--url", "https://duffel.com/docs/api/overview/welcome"],
+        "console": "integratedTerminal",
+        "justMyCode": false
+      }
+    ]
+  }

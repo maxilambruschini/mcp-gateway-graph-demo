@@ -21,5 +21,6 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=3.0.0",
     "langsmith>=0.4.38",
     "pyyaml>=6.0.3",
+    "questionary>=2.1.0",
     "requests>=2.32.5",
 ]

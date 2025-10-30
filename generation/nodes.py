@@ -1,14 +1,12 @@
 """Node functions for the Generation Graph.
 
-This module contains all 8 node functions:
+This module contains all 6 node functions:
 1. plan_work_node
-2. fetch_docs_node
-3. schema_synthesis_node
-4. compose_tool_node
-5. validate_node
-6. aggregate_tools_node
-7. interrupt_for_review_node
-8. finalize_node
+2. schema_synthesis_node
+3. compose_tool_node
+4. validate_node
+5. aggregate_tools_node
+6. finalize_node
 """
 
 import json
@@ -16,18 +14,14 @@ import json
 import jsonschema
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langgraph.types import interrupt
 
 from config import llm
 from discovery.helpers import calculate_confidence
 from generation.helpers import (
-    determine_verb,
     enhance_schema_with_metadata,
     extract_resource,
-    extract_vendor,
-    extract_version,
-    fetch_with_retry,
     generate_display_name,
+    generate_tool_name_from_display,
     remove_custom_fields,
 )
 from models import GenerationState
@@ -59,37 +53,6 @@ def plan_work_node(state: GenerationState) -> GenerationState:
     return {**state, "generation": generation}
 
 
-def fetch_docs_node(state: GenerationState) -> GenerationState:
-    """Fetch full documentation for each endpoint (with retry).
-
-    Args:
-        state: Current generation state
-
-    Returns:
-        Updated state with full documentation
-    """
-    generation = state["generation"]
-    work_items = generation["work_items"]
-
-    for item in work_items:
-        endpoint = item["endpoint"]
-
-        # If we already have full spec, skip
-        if endpoint.get("source") == "openapi" and endpoint.get("requestBody"):
-            item["full_docs"] = endpoint
-            continue
-
-        # Try to fetch more details
-        server = endpoint.get("server", "")
-        if server.startswith("http"):
-            full_docs = fetch_with_retry(server)
-            item["full_docs"] = full_docs or endpoint
-        else:
-            item["full_docs"] = endpoint
-
-    return {**state, "generation": generation}
-
-
 def schema_synthesis_node(state: GenerationState) -> GenerationState:
     """Generate JSON Schema Draft-07 compliant parameter schemas using LLM.
 
@@ -117,8 +80,7 @@ IMPORTANT STRUCTURE REQUIREMENTS:
 - Do NOT include a "$schema" field
 - Each property object MUST include:
   * "type": the JSON type
-  * "display_name": human-readable name
-  * "description": human-readable description. Can be a little longer than display_name
+  * "description": human-readable description
   * "properties": nested properties (for objects)
   * "required": array of required field names (can be empty [])
   * "visible": array of visible field names (list all properties)
@@ -151,7 +113,7 @@ Request Body: {request_body}""",
     chain = schema_prompt | llm | parser
 
     for item in work_items:
-        endpoint = item["full_docs"]
+        endpoint = item["endpoint"]
 
         try:
             schema = chain.invoke(
@@ -198,6 +160,11 @@ def compose_tool_node(state: GenerationState) -> GenerationState:
 
     tools = []
 
+    # Get vendor and server_url from selection state
+    selection = state["selection"]
+    vendor = selection["vendor"]
+    user_server_url = selection.get("server_url", "")
+
     for item in work_items:
         if item["status"] != "schema_generated":
             continue
@@ -205,21 +172,22 @@ def compose_tool_node(state: GenerationState) -> GenerationState:
         endpoint = item["endpoint"]
         schema = item["schema"]
 
-        # Extract vendor from server URL
-        server = endpoint.get("server", "")
-        vendor = extract_vendor(server)
-
-        # Extract resource and verb from path
+        # Extract components
         path = endpoint["path"]
+        method = endpoint["method"]
+        description = endpoint.get("description", f"{method} {path}")
+
+        # User-provided server_url takes precedence over discovered server
+        server = user_server_url or endpoint.get("server", "")
+
+        # Extract resource from path
         resource = extract_resource(path)
-        verb = determine_verb(endpoint["method"], path)
 
-        # Compose tool name: VENDOR__RESOURCE__VERB
-        tool_name = f"{vendor}__{resource}__{verb}".upper()
+        # Generate display name first (using LLM)
+        display_name = generate_display_name(method, path, description)
 
-        # Generate display name
-        description = endpoint.get("description", f"{endpoint['method']} {path}")
-        display_name = generate_display_name(tool_name, description)
+        # Generate tool name from vendor, resource, and display name
+        tool_name = generate_tool_name_from_display(vendor, resource, display_name)
 
         # Build MCP tool
         tool = {
@@ -228,15 +196,13 @@ def compose_tool_node(state: GenerationState) -> GenerationState:
             "description": description,
             "tags": [
                 vendor,
-                resource,
-                extract_version(path),
-                endpoint["method"].lower(),
+                method.lower(),
             ],
             "visibility": "public",
             "active": True,
             "protocol": "rest",
             "protocol_data": {
-                "method": endpoint["method"],
+                "method": method,
                 "path": path,
                 "server_url": server,
             },
@@ -283,7 +249,7 @@ def validate_node(state: GenerationState) -> GenerationState:
             tool["validated"] = True
             validated_tools.append(tool)
 
-        except jsonschema.exceptions.SchemaError as e:
+        except jsonschema.SchemaError as e:
             print(f"⚠️ Schema validation failed for {tool['name']}: {e}")
             generation["errors"].append(
                 {"tool_name": tool["name"], "error": str(e), "stage": "validation"}
@@ -311,46 +277,6 @@ def aggregate_tools_node(state: GenerationState) -> GenerationState:
     tools.sort(key=lambda t: t["name"])
 
     print(f"✅ Aggregated {len(tools)} tools")
-
-    return {**state, "generation": generation}
-
-
-def interrupt_for_review_node(state: GenerationState) -> GenerationState:
-    """Interrupt for human review and editing.
-
-    Args:
-        state: Current generation state
-
-    Returns:
-        Updated state with reviewed tools (populated on resume)
-    """
-    generation = state["generation"]
-    tools = generation["tools"]
-
-    print("\n" + "=" * 60)
-    print("🛑 INTERRUPT: Please review generated MCP tools")
-    print("=" * 60)
-    print(f"\nGenerated {len(tools)} tools:")
-
-    for tool in tools[:5]:  # Show first 5
-        print(f"\n📦 {tool['name']}")
-        print(f"   Description: {tool['description'][:80]}...")
-        print(f"   Tags: {', '.join(tool['tags'])}")
-
-    if len(tools) > 5:
-        print(f"\n... and {len(tools) - 5} more")
-
-    # Trigger interrupt
-    review_result = interrupt(
-        value={
-            "tools": tools,
-            "message": "Provide 'approved': true to finalize, or 'edited_tools' to update",
-        }
-    )
-
-    # Apply any edits
-    if review_result and review_result.get("edited_tools"):
-        generation["tools"] = review_result["edited_tools"]
 
     return {**state, "generation": generation}
 

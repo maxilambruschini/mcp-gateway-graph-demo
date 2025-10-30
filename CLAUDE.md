@@ -11,7 +11,7 @@ This project implements two composable LangGraph workflows for the MCP Gateway p
 1. **DiscoveryGraph** - Discovers API endpoints from uploaded specs or documentation URLs
 2. **GenerationGraph** - Generates JSON Draft-07 compliant MCP tool definitions
 
-The system uses LangGraph for workflow orchestration, LangChain for LLM operations, and includes human-in-the-loop interrupt handling for endpoint selection and review.
+The system uses LangGraph for workflow orchestration, LangChain for LLM operations, and includes human-in-the-loop interrupt handling for endpoint selection in the Discovery Graph.
 
 ## Project Structure
 
@@ -26,12 +26,13 @@ mcp-gateway-graph-demo/
 │   └── schemas.py              # State schemas, Pydantic models
 ├── discovery/
 │   ├── __init__.py
-│   ├── nodes.py                # 7 discovery node functions
+│   ├── nodes.py                # 6 discovery node functions
 │   ├── helpers.py              # OpenAPI parsing, LLM extraction, web crawling
+│   ├── runners.py              # Discovery runner functions
 │   └── graph.py                # build_discovery_graph()
 ├── generation/
 │   ├── __init__.py
-│   ├── nodes.py                # 8 generation node functions
+│   ├── nodes.py                # 7 generation node functions
 │   ├── helpers.py              # Schema enhancement, vendor extraction, validation
 │   └── graph.py                # build_generation_graph()
 ├── utils/
@@ -99,20 +100,20 @@ Required environment variables (configured in `.env`):
 **DiscoveryGraph Flow:**
 ```
 classify_input → parse_files → discover_from_web → endpoint_extractor
-→ normalize_and_dedup → summarize_for_ui → interrupt_for_selection → END
+→ normalize_and_dedup → summarize_for_ui → END
 ```
 
 **GenerationGraph Flow:**
 ```
-plan_work → fetch_docs → schema_synthesis → compose_tool → validate
-→ aggregate_tools → interrupt_for_review → finalize → END
+plan_work → schema_synthesis → compose_tool → validate
+→ aggregate_tools → finalize → END
 ```
 
 ### Key Architectural Patterns
 
 1. **State Management**: Uses TypedDict for state schemas (`DiscoveryState`, `GenerationState`)
 2. **Checkpointing**: SqliteSaver provides state persistence and resume capability
-3. **Interrupts**: Human-in-the-loop decision points use `interrupt()` from LangGraph
+3. **Interrupts**: Human-in-the-loop decision point in Discovery Graph for endpoint selection
 4. **Dual Input Sources**: Handles both file-based (OpenAPI specs) and URL-based (web crawling) discovery
 5. **LLM + Regex Hybrid**: Combines regex pattern matching with LLM extraction for robustness
 
@@ -120,8 +121,7 @@ plan_work → fetch_docs → schema_synthesis → compose_tool → validate
 
 **DiscoveryState:**
 - `input`: Input configuration (files or root_url)
-- `discovery`: Discovered endpoints and catalog
-- `selection`: User-selected endpoint IDs
+- `discovery`: Discovered endpoints, catalog, and normalized endpoints
 
 **GenerationState:**
 - `selection`: Selected endpoints from Discovery
@@ -187,12 +187,13 @@ All generated tools are validated using `jsonschema.Draft7Validator.check_schema
 - **schemas.py**: TypedDict state schemas (`DiscoveryState`, `GenerationState`) and Pydantic models (`EndpointInfo`, `EndpointList`)
 
 ### discovery/
-- **nodes.py**: 7 node functions (classify_input, parse_files, discover_from_web, endpoint_extractor, normalize_and_dedup, summarize_for_ui, interrupt_for_selection)
+- **nodes.py**: 6 node functions (classify_input, parse_files, discover_from_web, endpoint_extractor, normalize_and_dedup, summarize_for_ui)
 - **helpers.py**: Helper functions for OpenAPI parsing, LLM extraction, web crawling (sitemap + simple crawl), confidence calculation
+- **runners.py**: Runner functions (run_discovery_from_files, run_discovery_from_url)
 - **graph.py**: `build_discovery_graph()` function that creates the workflow
 
 ### generation/
-- **nodes.py**: 8 node functions (plan_work, fetch_docs, schema_synthesis, compose_tool, validate, aggregate_tools, interrupt_for_review, finalize)
+- **nodes.py**: 6 node functions (plan_work, schema_synthesis, compose_tool, validate, aggregate_tools, finalize)
 - **helpers.py**: Schema enhancement, display name generation, vendor/resource/verb extraction, validation utilities
 - **graph.py**: `build_generation_graph()` function that creates the workflow
 
@@ -205,21 +206,20 @@ All generated tools are validated using `jsonschema.Draft7Validator.check_schema
 
 ### main.py
 - CLI interface using **Click** (not argparse)
-- Commands: `--files`, `--url`, `--output`, `--auto-approve`, `--example`
+- Commands: `--files`, `--url`, `--output`, `--auto-approve`
 - Orchestrates discovery and generation workflows
-- Handles interrupt resumption for human-in-the-loop
+- Handles user endpoint selection between Discovery and Generation
 
 ## Testing Pattern
 
 The test suite (`tests/test_workflow.py`) includes:
 
 1. Creating mock API specifications
-2. Running Discovery Graph to interrupt
-3. Simulating user selection
-4. Resuming with selected endpoints
-5. Running Generation Graph to interrupt
-6. Simulating user approval
-7. Validating final output
+2. Running Discovery Graph to completion
+3. Extracting discovered endpoints from final state
+4. Simulating user selection in orchestration layer
+5. Running Generation Graph to completion
+6. Validating final output
 
 Run tests:
 ```bash
@@ -259,10 +259,7 @@ from generation import build_generation_graph
 discovery_graph, generation_graph = build_full_workflow()
 
 # Or build individually
-discovery_graph = build_discovery_graph().compile(
-    checkpointer=checkpointer,
-    interrupt_before=["interrupt_for_selection"]
-)
+discovery_graph = build_discovery_graph().compile(checkpointer=checkpointer)
 ```
 
 ### Running Discovery Only
@@ -271,28 +268,33 @@ from utils import build_full_workflow
 
 discovery_graph, _ = build_full_workflow()
 config = {"configurable": {"thread_id": "unique-id"}}
-input_data = {"input": {"files": ["/path/to/spec.json"]}, "discovery": {}, "selection": {}}
+input_data = {"input": {"files": ["/path/to/spec.json"]}, "discovery": {}}
 
 for event in discovery_graph.stream(input_data, config):
     print(event)
+
+# Get discovered endpoints from final state
+final_state = discovery_graph.get_state(config)
+endpoints = final_state.values.get("discovery", {}).get("endpoints_normalized", [])
 ```
 
-### Resuming After Interrupt
+### Running Generation Graph
 ```python
-# Update state with user input
-discovery_graph.update_state(
-    config,
-    {"selection": {"endpoint_ids": ["id1", "id2"]}},
-    as_node="interrupt_for_selection"
+from generation.runners import run_generation
+
+# Generation Graph runs to completion without interrupts
+final_state = run_generation(
+    generation_graph,
+    selected_ids=["endpoint-id-1", "endpoint-id-2"],
+    endpoints=endpoints
 )
 
-# Continue execution
-for event in discovery_graph.stream(None, config):
-    pass
+# Get generated tools
+tools = final_state.values.get("generation", {}).get("tools", [])
 ```
 
 ### Composing Both Graphs
-The graphs are designed to be composed - Discovery output feeds directly into Generation input via the `selection` state. The CLI (`main.py`) demonstrates this pattern.
+Discovery Graph runs to completion and outputs all discovered endpoints. User selection happens in the orchestration layer (main.py), and then selected endpoints are passed to the Generation Graph which runs to completion. The CLI (`main.py`) demonstrates this pattern.
 
 ## Dependencies
 
@@ -381,4 +383,4 @@ python main.py --help
 4. **Type Hints**: All functions include comprehensive type hints using Python's `typing` module.
 5. **Custom Schema Fields**: The `visible` field is a custom extension used for UI rendering. It's removed during validation.
 6. **Checkpointing**: Uses in-memory SQLite by default. Can be changed to file-based in `utils/workflow.py`.
-7. **Interrupt Handling**: Both graphs have interrupt points. The CLI automatically handles resumption.
+7. **Interrupt Handling**: Discovery Graph has an interrupt point for endpoint selection. The CLI automatically handles resumption.

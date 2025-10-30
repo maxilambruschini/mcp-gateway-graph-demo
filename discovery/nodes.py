@@ -1,13 +1,12 @@
 """Node functions for the Discovery Graph.
 
-This module contains all 7 node functions:
+This module contains all 6 node functions:
 1. classify_input_node
 2. parse_files_node
 3. discover_from_web_node
 4. endpoint_extractor_node
 5. normalize_and_dedup_node
 6. summarize_for_ui_node
-7. interrupt_for_selection_node
 """
 
 import hashlib
@@ -15,12 +14,14 @@ import json
 import re
 
 import yaml
-from langgraph.types import interrupt
 
-from config import LLM_PAGE_SAMPLE_LENGTH
-from discovery.helpers import (calculate_confidence, extract_openapi_endpoints,
-                               llm_extract_endpoints, simple_crawl,
-                               try_sitemap)
+from discovery.helpers import (
+    calculate_confidence,
+    extract_openapi_endpoints,
+    llm_extract_endpoints,
+    simple_crawl,
+    try_sitemap,
+)
 from models import DiscoveryState
 
 
@@ -57,10 +58,6 @@ def parse_files_node(state: DiscoveryState) -> DiscoveryState:
         Updated state with extracted endpoints from files
     """
     discovery = state["discovery"]
-
-    if discovery["input_type"] != "file":
-        return state
-
     files = state["input"].get("files", [])
     endpoints_raw = []
 
@@ -107,10 +104,6 @@ def discover_from_web_node(state: DiscoveryState) -> DiscoveryState:
         Updated state with discovered web pages
     """
     discovery = state["discovery"]
-
-    if discovery["input_type"] != "url":
-        return state
-
     root_url = state["input"].get("root_url")
     if not root_url:
         return state
@@ -122,7 +115,7 @@ def discover_from_web_node(state: DiscoveryState) -> DiscoveryState:
 
     if not pages:
         # Fallback to simple crawl
-        pages = simple_crawl(root_url)
+        pages = simple_crawl(root_url, max_pages=10)
 
     discovery["pages"] = pages
     print(f"✅ Discovered {len(pages)} pages")
@@ -139,6 +132,8 @@ def endpoint_extractor_node(state: DiscoveryState) -> DiscoveryState:
     Returns:
         Updated state with extracted endpoints from pages
     """
+    input = state["input"]
+    server_url = input.get("server_url", "")
     discovery = state["discovery"]
     pages = discovery.get("pages", [])
 
@@ -150,6 +145,7 @@ def endpoint_extractor_node(state: DiscoveryState) -> DiscoveryState:
     endpoints_raw = discovery.get("endpoints_raw", [])
 
     for page in pages:
+        print("Extracting from page:", page.get("url", "N/A"))
         content = page.get("content", "")
         if not content:
             continue
@@ -168,16 +164,15 @@ def endpoint_extractor_node(state: DiscoveryState) -> DiscoveryState:
                     {
                         "method": method.upper(),
                         "path": path,
-                        "server": page.get("url", ""),
+                        "server": server_url,
                         "description": "",
                         "source": "regex",
                     }
                 )
 
         # Also use LLM for structured extraction (sample pages to save tokens)
-        if len(endpoints_raw) < 10:  # Only if we haven't found enough
-            llm_endpoints = llm_extract_endpoints(content[:LLM_PAGE_SAMPLE_LENGTH])
-            endpoints_raw.extend(llm_endpoints)
+        llm_endpoints = llm_extract_endpoints(content)
+        endpoints_raw.extend(llm_endpoints)
 
     discovery["endpoints_raw"] = endpoints_raw
     print(f"✅ Extracted {len(endpoints_raw)} raw endpoints")
@@ -194,6 +189,8 @@ def normalize_and_dedup_node(state: DiscoveryState) -> DiscoveryState:
     Returns:
         Updated state with normalized and deduplicated endpoints
     """
+    input = state["input"]
+    server_url = input.get("server_url", "")
     discovery = state["discovery"]
     endpoints_raw = discovery.get("endpoints_raw", [])
 
@@ -203,7 +200,6 @@ def normalize_and_dedup_node(state: DiscoveryState) -> DiscoveryState:
 
     for ep in endpoints_raw:
         # Create unique key
-        server = ep.get("server", "").strip()
         method = ep.get("method", "GET").upper()
         path = ep.get("path", "").strip()
 
@@ -214,7 +210,7 @@ def normalize_and_dedup_node(state: DiscoveryState) -> DiscoveryState:
         path = path.split("?")[0]  # Remove query string
         path = re.sub(r"\s+", "", path)  # Remove whitespace
 
-        unique_key = f"{server}|{method}|{path}"
+        unique_key = f"{server_url}|{method}|{path}"
 
         if unique_key not in seen:
             seen.add(unique_key)
@@ -224,7 +220,7 @@ def normalize_and_dedup_node(state: DiscoveryState) -> DiscoveryState:
                 "id": hashlib.md5(unique_key.encode()).hexdigest()[:12],
                 "method": method,
                 "path": path,
-                "server": server,
+                "server": server_url,
                 "description": ep.get("description", "").strip(),
                 "parameters": ep.get("parameters", []),
                 "requestBody": ep.get("requestBody", {}),
@@ -259,9 +255,7 @@ def summarize_for_ui_node(state: DiscoveryState) -> DiscoveryState:
 
         # Extract resource name
         parts = [
-            p
-            for p in path.split("/")
-            if p and not p.startswith("v") and not p.startswith("{")
+            p for p in path.split("/") if p and not p.startswith("v") and not p.startswith("{")
         ]
         resource = parts[0] if parts else "other"
 
@@ -289,38 +283,3 @@ def summarize_for_ui_node(state: DiscoveryState) -> DiscoveryState:
     print(f"✅ Created catalog with {len(groups)} resource groups")
 
     return {**state, "discovery": discovery}
-
-
-def interrupt_for_selection_node(state: DiscoveryState) -> DiscoveryState:
-    """Interrupt execution to allow user to select endpoints.
-
-    Args:
-        state: Current discovery state
-
-    Returns:
-        Updated state with user selection (populated on resume)
-    """
-    catalog = state["discovery"].get("catalog", {})
-
-    print("\n" + "=" * 60)
-    print("🛑 INTERRUPT: Please select endpoints to generate tools for")
-    print("=" * 60)
-    print(f"\nTotal endpoints discovered: {catalog.get('total_endpoints', 0)}")
-    print(f"Resource groups: {catalog.get('resource_count', 0)}")
-
-    # Display summary
-    for resource, endpoints in catalog.get("resources", {}).items():
-        print(f"\n📁 {resource.upper()} ({len(endpoints)} endpoints)")
-        for ep in endpoints[:3]:  # Show first 3
-            print(f"  - [{ep['id']}] {ep['method']} {ep['path']}")
-
-    # Trigger interrupt
-    selection = interrupt(
-        value={
-            "catalog": catalog,
-            "message": "Please provide 'endpoint_ids' to continue",
-        }
-    )
-
-    # This will be populated when graph resumes
-    return {**state, "selection": selection or {}}

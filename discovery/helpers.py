@@ -16,8 +16,13 @@ from bs4 import BeautifulSoup
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from config import (CRAWL_THROTTLE_SECONDS, LLM_CONTENT_TRUNCATE_LENGTH,
-                    MAX_CRAWL_PAGES, SITEMAP_URL_LIMIT, llm)
+from config import (
+    CRAWL_THROTTLE_SECONDS,
+    LLM_CONTENT_TRUNCATE_LENGTH,
+    MAX_CRAWL_PAGES,
+    SITEMAP_URL_LIMIT,
+    llm,
+)
 from models import EndpointList
 
 
@@ -50,9 +55,7 @@ def extract_openapi_endpoints(spec: dict) -> List[dict]:
                         "method": method.upper(),
                         "path": path,
                         "server": server_url,
-                        "description": details.get(
-                            "summary", details.get("description", "")
-                        ),
+                        "description": details.get("summary", details.get("description", "")),
                         "parameters": details.get("parameters", []),
                         "requestBody": details.get("requestBody", {}),
                         "source": "openapi",
@@ -94,6 +97,7 @@ Return a JSON array of endpoints.""",
     try:
         # Truncate content if too long
         truncated = content[:LLM_CONTENT_TRUNCATE_LENGTH]
+        # truncated = content
         result = chain.invoke({"content": truncated})
 
         return [
@@ -105,7 +109,7 @@ Return a JSON array of endpoints.""",
                 "parameters": ep.get("parameters", []),
                 "source": "llm",
             }
-            for ep in result.get("endpoints", [])
+            for ep in result
         ]
     except Exception as e:
         print(f"⚠️ LLM extraction error: {e}")
@@ -129,9 +133,7 @@ def try_sitemap(root_url: str) -> List[dict]:
             soup = BeautifulSoup(response.content, "xml")
             urls = [loc.text for loc in soup.find_all("loc")]
             print(f"✅ Found sitemap with {len(urls)} URLs")
-            return [
-                {"url": url, "source": "sitemap"} for url in urls[:SITEMAP_URL_LIMIT]
-            ]
+            return [{"url": url, "source": "sitemap"} for url in urls[:SITEMAP_URL_LIMIT]]
     except Exception as e:
         print(f"⚠️ Sitemap not found: {e}")
 
@@ -167,6 +169,7 @@ def simple_crawl(root_url: str, max_pages: int = MAX_CRAWL_PAGES) -> List[dict]:
             response = requests.get(url, timeout=10)
 
             if response.status_code == 200:
+                print(f"✅ Crawled: {url}")
                 pages.append({"url": url, "content": response.text, "source": "crawl"})
 
                 # Extract links for further crawling
@@ -175,6 +178,7 @@ def simple_crawl(root_url: str, max_pages: int = MAX_CRAWL_PAGES) -> List[dict]:
                     next_url = urljoin(url, link["href"])
                     next_domain = urlparse(next_url).netloc
 
+                    # if next_url.startswith(root_url) and next_url not in visited:
                     if next_domain == base_domain and next_url not in visited:
                         to_visit.append(next_url)
 
