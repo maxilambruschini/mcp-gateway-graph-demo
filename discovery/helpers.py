@@ -65,7 +65,7 @@ def extract_openapi_endpoints(spec: dict) -> List[dict]:
     return endpoints
 
 
-def llm_extract_endpoints(content: str) -> List[dict]:
+async def llm_extract_endpoints(content: str) -> List[dict]:
     """Use LLM to extract endpoints from unstructured content.
 
     Args:
@@ -98,7 +98,7 @@ Return a JSON array of endpoints.""",
         # Truncate content if too long
         truncated = content[:LLM_CONTENT_TRUNCATE_LENGTH]
         # truncated = content
-        result = chain.invoke({"content": truncated})
+        result = await chain.ainvoke({"content": truncated})
 
         return [
             {

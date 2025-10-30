@@ -9,6 +9,7 @@ This module contains all 6 node functions:
 6. summarize_for_ui_node
 """
 
+import asyncio
 import hashlib
 import json
 import re
@@ -126,6 +127,8 @@ def discover_from_web_node(state: DiscoveryState) -> DiscoveryState:
 def endpoint_extractor_node(state: DiscoveryState) -> DiscoveryState:
     """Extract endpoint information using regex + LLM.
 
+    Uses async processing for concurrent LLM extraction across all pages.
+
     Args:
         state: Current discovery state
 
@@ -144,35 +147,52 @@ def endpoint_extractor_node(state: DiscoveryState) -> DiscoveryState:
 
     endpoints_raw = discovery.get("endpoints_raw", [])
 
-    for page in pages:
-        print("Extracting from page:", page.get("url", "N/A"))
-        content = page.get("content", "")
-        if not content:
-            continue
+    async def process_all_pages():
+        """Process all pages concurrently."""
 
-        # Regex patterns for common API endpoint formats
-        patterns = [
-            r"(GET|POST|PUT|DELETE|PATCH)\s+(/api/[\w\-/{}]+)",
-            r"(GET|POST|PUT|DELETE|PATCH)\s+(/v\d+/[\w\-/{}]+)",
-            r"`(GET|POST|PUT|DELETE|PATCH)\s+([^`]+)`",
-        ]
+        async def process_page(page):
+            """Process a single page asynchronously."""
+            page_endpoints = []
+            print("Extracting from page:", page.get("url", "N/A"))
+            content = page.get("content", "")
+            if not content:
+                return page_endpoints
 
-        for pattern in patterns:
-            matches = re.findall(pattern, content, re.IGNORECASE)
-            for method, path in matches:
-                endpoints_raw.append(
-                    {
-                        "method": method.upper(),
-                        "path": path,
-                        "server": server_url,
-                        "description": "",
-                        "source": "regex",
-                    }
-                )
+            # Regex patterns for common API endpoint formats
+            patterns = [
+                r"(GET|POST|PUT|DELETE|PATCH)\s+(/api/[\w\-/{}]+)",
+                r"(GET|POST|PUT|DELETE|PATCH)\s+(/v\d+/[\w\-/{}]+)",
+                r"`(GET|POST|PUT|DELETE|PATCH)\s+([^`]+)`",
+            ]
 
-        # Also use LLM for structured extraction (sample pages to save tokens)
-        llm_endpoints = llm_extract_endpoints(content)
-        endpoints_raw.extend(llm_endpoints)
+            for pattern in patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for method, path in matches:
+                    page_endpoints.append(
+                        {
+                            "method": method.upper(),
+                            "path": path,
+                            "server": server_url,
+                            "description": "",
+                            "source": "regex",
+                        }
+                    )
+
+            # Also use LLM for structured extraction (async call)
+            llm_endpoints = await llm_extract_endpoints(content)
+            page_endpoints.extend(llm_endpoints)
+
+            return page_endpoints
+
+        # Process all pages concurrently
+        results = await asyncio.gather(*[process_page(page) for page in pages])
+
+        # Flatten results
+        for page_endpoints in results:
+            endpoints_raw.extend(page_endpoints)
+
+    # Run async logic in sync context
+    asyncio.run(process_all_pages())
 
     discovery["endpoints_raw"] = endpoints_raw
     print(f"✅ Extracted {len(endpoints_raw)} raw endpoints")

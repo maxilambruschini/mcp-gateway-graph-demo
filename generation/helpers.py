@@ -81,7 +81,7 @@ def enhance_schema_with_metadata(schema: dict, endpoint: dict) -> dict:
     return process_object(schema, is_flexible=is_flexible_endpoint)
 
 
-def generate_display_name_with_llm(method: str, path: str, description: str) -> str:
+async def generate_display_name_with_llm(method: str, path: str, description: str) -> str:
     """Generate a human-readable display name using LLM.
 
     Uses llm_mini to generate concise, action-oriented display names.
@@ -97,9 +97,15 @@ def generate_display_name_with_llm(method: str, path: str, description: str) -> 
     Raises:
         Exception: If LLM call fails (caller should handle with fallback)
     """
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are an API documentation expert. Generate concise, action-oriented display names for API endpoints."),
-        ("human", """Generate a display name for this API endpoint.
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are an API documentation expert. Generate concise, action-oriented display names for API endpoints.",
+            ),
+            (
+                "human",
+                """Generate a display name for this API endpoint.
 
 HTTP Method: {method}
 Path: {path}
@@ -111,16 +117,16 @@ Requirements:
 - Clear and user-friendly
 - No special characters or underscores
 
-Display name:""")
-    ])
+Display name:""",
+            ),
+        ]
+    )
 
     chain = prompt | llm_mini | StrOutputParser()
 
-    result = chain.invoke({
-        "method": method,
-        "path": path,
-        "description": description or f"{method} {path}"
-    })
+    result = await chain.ainvoke(
+        {"method": method, "path": path, "description": description or f"{method} {path}"}
+    )
 
     # Clean up the result (remove quotes, extra whitespace)
     display_name = result.strip().strip('"').strip("'").strip()
@@ -152,17 +158,15 @@ def generate_display_name_fallback(method: str, path: str, description: str) -> 
             return first_sentence
 
     # Fall back to parsing the path and method
-    resource = extract_resource(path)
     verb = determine_verb(method, path)
 
     # Format: "Verb Resource" (e.g., "Search Flights")
-    resource_formatted = resource.replace("_", " ").title()
     verb_formatted = verb.replace("_", " ").title()
 
-    return f"{verb_formatted} {resource_formatted}"
+    return verb_formatted
 
 
-def generate_display_name(method: str, path: str, description: str) -> str:
+async def generate_display_name(method: str, path: str, description: str) -> str:
     """Generate a human-readable display name with LLM and fallback.
 
     Tries LLM-based generation first, falls back to heuristics on failure.
@@ -176,47 +180,33 @@ def generate_display_name(method: str, path: str, description: str) -> str:
         Human-readable display name
     """
     try:
-        return generate_display_name_with_llm(method, path, description)
+        return await generate_display_name_with_llm(method, path, description)
     except Exception as e:
         # Log the error and fall back to heuristic approach
         print(f"⚠️  LLM display name generation failed: {e}. Using fallback.")
         return generate_display_name_fallback(method, path, description)
 
 
-def generate_tool_name_from_display(vendor: str, resource: str, display_name: str) -> str:
+def generate_tool_name_from_display(vendor: str, display_name: str) -> str:
     """Generate tool name from vendor, resource, and display name.
 
-    Format: VENDOR__RESOURCE__SANITIZED_DISPLAY_NAME
+    Format: VENDOR__SANITIZED_DISPLAY_NAME
 
     Args:
         vendor: Vendor/service name (e.g., "example", "duffel")
-        resource: Resource extracted from path (e.g., "flights", "bookings")
         display_name: Human-readable display name (e.g., "Search Flights")
 
     Returns:
-        Tool name in VENDOR__RESOURCE__ACTION format (e.g., "EXAMPLE__FLIGHTS__SEARCH_FLIGHTS")
+        Tool name in VENDOR__SANITIZED_DISPLAY_NAME format (e.g., "EXAMPLE__SEARCH_FLIGHTS")
     """
     # Sanitize display name: remove special chars, convert spaces to underscores
-    sanitized = re.sub(r'[^a-zA-Z0-9\s]', '', display_name)
-    sanitized = sanitized.strip().replace(' ', '_')
+    sanitized = re.sub(r"[^a-zA-Z0-9\s]", "", display_name)
+    sanitized = sanitized.strip().replace(" ", "_")
 
     # Construct tool name
-    tool_name = f"{vendor}__{resource}__{sanitized}".upper()
+    tool_name = f"{vendor}__{sanitized}".upper()
 
     return tool_name
-
-
-def extract_resource(path: str) -> str:
-    """Extract resource name from path.
-
-    Args:
-        path: API path (e.g., /api/v1/flights/{id})
-
-    Returns:
-        Resource name (e.g., "flights")
-    """
-    parts = [p for p in path.split("/") if p and not p.startswith("v") and not p.startswith("{")]
-    return parts[0] if parts else "resource"
 
 
 def determine_verb(method: str, path: str) -> str:

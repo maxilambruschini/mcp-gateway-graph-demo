@@ -9,6 +9,7 @@ This module contains all 6 node functions:
 6. finalize_node
 """
 
+import asyncio
 import json
 
 import jsonschema
@@ -19,7 +20,6 @@ from config import llm
 from discovery.helpers import calculate_confidence
 from generation.helpers import (
     enhance_schema_with_metadata,
-    extract_resource,
     generate_display_name,
     generate_tool_name_from_display,
     remove_custom_fields,
@@ -55,6 +55,9 @@ def plan_work_node(state: GenerationState) -> GenerationState:
 
 def schema_synthesis_node(state: GenerationState) -> GenerationState:
     """Generate JSON Schema Draft-07 compliant parameter schemas using LLM.
+
+    Uses async processing with ainvoke() for concurrent schema generation.
+    Wraps async logic in asyncio.run() for sync compatibility.
 
     Args:
         state: Current generation state
@@ -112,42 +115,54 @@ Request Body: {request_body}""",
     parser = JsonOutputParser()
     chain = schema_prompt | llm | parser
 
-    for item in work_items:
-        endpoint = item["endpoint"]
+    async def process_all_items():
+        """Process all work items concurrently."""
 
-        try:
-            schema = chain.invoke(
-                {
-                    "method": endpoint["method"],
-                    "path": endpoint["path"],
-                    "description": endpoint.get("description", ""),
-                    "parameters": json.dumps(endpoint.get("parameters", [])),
-                    "request_body": json.dumps(endpoint.get("requestBody", {})),
-                }
-            )
+        async def process_item(item):
+            """Process a single work item asynchronously."""
+            endpoint = item["endpoint"]
 
-            # Enhance schema with metadata (required, visible, additionalProperties)
-            schema = enhance_schema_with_metadata(schema, endpoint)
+            try:
+                schema = await chain.ainvoke(
+                    {
+                        "method": endpoint["method"],
+                        "path": endpoint["path"],
+                        "description": endpoint.get("description", ""),
+                        "parameters": json.dumps(endpoint.get("parameters", [])),
+                        "request_body": json.dumps(endpoint.get("requestBody", {})),
+                    }
+                )
 
-            item["schema"] = schema
-            item["status"] = "schema_generated"
+                # Enhance schema with metadata (required, visible, additionalProperties)
+                schema = enhance_schema_with_metadata(schema, endpoint)
 
-        except Exception as e:
-            print(f"⚠️ Schema generation failed for {endpoint['id']}: {e}")
-            generation["errors"].append(
-                {
-                    "endpoint_id": endpoint["id"],
-                    "error": str(e),
-                    "stage": "schema_synthesis",
-                }
-            )
-            item["status"] = "error"
+                item["schema"] = schema
+                item["status"] = "schema_generated"
+
+            except Exception as e:
+                print(f"⚠️ Schema generation failed for {endpoint['id']}: {e}")
+                generation["errors"].append(
+                    {
+                        "endpoint_id": endpoint["id"],
+                        "error": str(e),
+                        "stage": "schema_synthesis",
+                    }
+                )
+                item["status"] = "error"
+
+        # Process all items concurrently
+        await asyncio.gather(*[process_item(item) for item in work_items])
+
+    # Run async logic in sync context
+    asyncio.run(process_all_items())
 
     return {**state, "generation": generation}
 
 
 def compose_tool_node(state: GenerationState) -> GenerationState:
     """Build final MCP tool objects with proper naming and structure.
+
+    Uses async processing for concurrent display name generation.
 
     Args:
         state: Current generation state
@@ -165,56 +180,66 @@ def compose_tool_node(state: GenerationState) -> GenerationState:
     vendor = selection["vendor"]
     user_server_url = selection.get("server_url", "")
 
-    for item in work_items:
-        if item["status"] != "schema_generated":
-            continue
+    async def process_all_items():
+        """Process all work items concurrently."""
 
-        endpoint = item["endpoint"]
-        schema = item["schema"]
+        async def process_item(item):
+            """Process a single work item asynchronously."""
+            if item["status"] != "schema_generated":
+                return None
 
-        # Extract components
-        path = endpoint["path"]
-        method = endpoint["method"]
-        description = endpoint.get("description", f"{method} {path}")
+            endpoint = item["endpoint"]
+            schema = item["schema"]
 
-        # User-provided server_url takes precedence over discovered server
-        server = user_server_url or endpoint.get("server", "")
+            # Extract components
+            path = endpoint["path"]
+            method = endpoint["method"]
+            description = endpoint.get("description", f"{method} {path}")
 
-        # Extract resource from path
-        resource = extract_resource(path)
+            # User-provided server_url takes precedence over discovered server
+            server = user_server_url or endpoint.get("server", "")
 
-        # Generate display name first (using LLM)
-        display_name = generate_display_name(method, path, description)
+            # Generate display name first (using LLM - async)
+            display_name = await generate_display_name(method, path, description)
 
-        # Generate tool name from vendor, resource, and display name
-        tool_name = generate_tool_name_from_display(vendor, resource, display_name)
+            # Generate tool name from vendor, resource, and display name
+            tool_name = generate_tool_name_from_display(vendor, display_name)
 
-        # Build MCP tool
-        tool = {
-            "name": tool_name,
-            "display_name": display_name,
-            "description": description,
-            "tags": [
-                vendor,
-                method.lower(),
-            ],
-            "visibility": "public",
-            "active": True,
-            "protocol": "rest",
-            "protocol_data": {
-                "method": method,
-                "path": path,
-                "server_url": server,
-            },
-            "parameters": schema,
-            "metadata": {
-                "source": endpoint.get("source", "unknown"),
-                "confidence": calculate_confidence(endpoint),
-            },
-        }
+            # Build MCP tool
+            tool = {
+                "name": tool_name,
+                "display_name": display_name,
+                "description": description,
+                "tags": [
+                    vendor,
+                    method.lower(),
+                ],
+                "visibility": "public",
+                "active": True,
+                "protocol": "rest",
+                "protocol_data": {
+                    "method": method,
+                    "path": path,
+                    "server_url": server,
+                },
+                "parameters": schema,
+                "metadata": {
+                    "source": endpoint.get("source", "unknown"),
+                    "confidence": calculate_confidence(endpoint),
+                },
+            }
 
-        tools.append(tool)
-        item["status"] = "composed"
+            item["status"] = "composed"
+            return tool
+
+        # Process all items concurrently
+        results = await asyncio.gather(*[process_item(item) for item in work_items])
+
+        # Filter out None results (items that were skipped)
+        return [tool for tool in results if tool is not None]
+
+    # Run async logic in sync context
+    tools = asyncio.run(process_all_items())
 
     generation["tools"] = tools
     print(f"✅ Composed {len(tools)} MCP tools")
