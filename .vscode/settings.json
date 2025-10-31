@@ -2,14 +2,11 @@
     "[python]": {
         "editor.codeActionsOnSave": {
           "source.organizeImports": "explicit",
+          "source.fixAll": "explicit"
         },
         "editor.formatOnSave": true,
-        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.defaultFormatter": "charliermarsh.ruff",
     },
-    "black-formatter.args": [
-      "--line-length",
-      "100"
-    ],
     "[json]": {
       "editor.defaultFormatter": "vscode.json-language-features"
     },

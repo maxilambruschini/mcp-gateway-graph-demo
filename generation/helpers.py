@@ -101,7 +101,7 @@ async def generate_display_name_with_llm(method: str, path: str, description: st
         [
             (
                 "system",
-                "You are an API documentation expert. Generate concise, action-oriented display names for API endpoints.",
+                "You are an API documentation expert. Generate concise, action-oriented display names for API endpoints.",  # noqa: E501
             ),
             (
                 "human",

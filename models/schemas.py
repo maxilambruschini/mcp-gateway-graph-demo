@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from pydantic import BaseModel, Field
 
+
 # ============================================================================
 # TypedDict State Schemas
 # ============================================================================

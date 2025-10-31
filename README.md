@@ -572,20 +572,17 @@ uv run python main.py --example
 
 ### Code Quality
 
-The project uses:
-- **Black** for code formatting
-- **isort** for import sorting
-- **Flake8** for linting
+The project uses **Ruff** for code formatting, import sorting, and linting.
 
 ```bash
 # Format code
-uv run black .
+uv run ruff format .
 
-# Sort imports
-uv run isort .
+# Sort imports and fix issues
+uv run ruff check --fix .
 
-# Lint code
-uv run flake8 .
+# Lint code (check only)
+uv run ruff check .
 ```
 
 ### Important Implementation Notes
@@ -633,9 +630,7 @@ Key packages (see `pyproject.toml` for full list):
 - `requests>=2.32.5` - HTTP requests
 
 ### Development Tools
-- `black>=25.9.0` - Code formatting
-- `isort>=7.0.0` - Import sorting
-- `flake8>=7.3.0` - Linting
+- `ruff>=0.14.3` - Code formatting, import sorting, and linting
 
 ---
 

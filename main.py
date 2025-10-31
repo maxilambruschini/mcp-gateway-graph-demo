@@ -37,7 +37,7 @@ Examples:
   \b
   # Interactive mode (auto-select all endpoints)
   python main.py --vendor myapp --server-url https://api.example.com/v1 --files api_spec.json --auto-approve --output tools.json
-    """,
+    """,  # noqa: E501
 )
 @click.option(
     "--vendor",

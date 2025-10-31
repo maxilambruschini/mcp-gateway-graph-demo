@@ -7,12 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.13.1",
     "beautifulsoup4>=4.14.2",
-    "black>=25.9.0",
     "click>=8.1.0",
     "debugpy>=1.8.17",
     "dotenv>=0.9.9",
-    "flake8>=7.3.0",
-    "isort>=7.0.0",
     "jsonschema>=4.25.1",
     "langchain>=1.0.2",
     "langchain-core>=1.0.1",
@@ -23,4 +20,24 @@ dependencies = [
     "pyyaml>=6.0.3",
     "questionary>=2.1.0",
     "requests>=2.32.5",
+    "ruff>=0.14.3",
 ]
+
+[tool.ruff]
+line-length = 100
+exclude = [".venv", ".git", "__pycache__", "notebooks", "alembic"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "models", "discovery", "generation", "utils", "tests"]
+force-single-line = false
+lines-after-imports = 2

@@ -100,7 +100,7 @@ SCHEMA FEATURES TO INCLUDE:
 - Use array notation for nullable types: ["string", "null"]
 - Use "allOf", "oneOf", "anyOf" for complex validation when needed
 
-Return ONLY valid JSON without markdown formatting.""",
+Return ONLY valid JSON without markdown formatting.""",  # noqa: E501
             ),
             (
                 "human",

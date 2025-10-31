@@ -30,7 +30,12 @@ def run_generation(
     print("=" * 60 + "\n")
 
     generation_input = {
-        "selection": {"endpoint_ids": selected_ids, "endpoints": endpoints, "vendor": vendor, "server_url": server_url},
+        "selection": {
+            "endpoint_ids": selected_ids,
+            "endpoints": endpoints,
+            "vendor": vendor,
+            "server_url": server_url,
+        },
         "generation": {},
     }
 

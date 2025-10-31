@@ -2,6 +2,7 @@
 
 from .schemas import DiscoveryState, EndpointInfo, EndpointList, GenerationState
 
+
 __all__ = [
     "DiscoveryState",
     "GenerationState",

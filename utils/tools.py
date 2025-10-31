@@ -26,7 +26,7 @@ def select_endpoints_interactively(endpoints: List[Dict[str, Any]]) -> List[str]
         List of selected endpoint IDs
     """
     print(
-        "\n📋 Discovered endpoints - Use arrow keys to navigate, Space to select/deselect, Enter to confirm"
+        "\n📋 Discovered endpoints - Use arrow keys to navigate, Space to select/deselect, Enter to confirm"  # noqa: E501
     )
 
     # Create choices with formatted display names
